@@ -12,6 +12,7 @@ interface LogWebhookEventInput {
 export interface LoggedWebhookEvent {
   id: number;
   duplicate: boolean;
+  existingStatus: "received" | "queued" | "processed" | "failed" | "ignored" | null;
 }
 
 export async function logWebhookEvent(input: LogWebhookEventInput): Promise<LoggedWebhookEvent> {
@@ -30,13 +31,13 @@ export async function logWebhookEvent(input: LogWebhookEventInput): Promise<Logg
     .single();
 
   if (!error && data?.id) {
-    return { id: Number(data.id), duplicate: false };
+    return { id: Number(data.id), duplicate: false, existingStatus: null };
   }
 
   if (error && String((error as { code?: string }).code) === "23505") {
     const baseQuery = supabase
       .from("webhook_events")
-      .select("id")
+      .select("id,status")
       .eq("provider", input.provider)
       .order("received_at", { ascending: false })
       .limit(1);
@@ -47,7 +48,11 @@ export async function logWebhookEvent(input: LogWebhookEventInput): Promise<Logg
 
     if (existingError) throw existingError;
     if (!existing?.id) throw error;
-    return { id: Number(existing.id), duplicate: true };
+    return {
+      id: Number(existing.id),
+      duplicate: true,
+      existingStatus: String(existing.status ?? "") as LoggedWebhookEvent["existingStatus"],
+    };
   }
 
   if (error) throw error;

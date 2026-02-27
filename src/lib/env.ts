@@ -4,6 +4,12 @@ const emptyToUndefined = (value: unknown) =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
 
 const optionalSecret = z.preprocess(emptyToUndefined, z.string().min(1).optional());
+const toBoolean = (value: unknown) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+};
 
 const serverEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -19,6 +25,7 @@ const serverEnvSchema = z.object({
   ASAAS_API_KEY: optionalSecret,
   ASAAS_API_BASE: z.string().url().default("https://api.asaas.com/v3"),
   ASAAS_WEBHOOK_TOKEN: optionalSecret,
+  BILLING_DISABLED: z.preprocess(toBoolean, z.boolean()).default(false),
   REDIS_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   QUEUE_PREFIX: z.string().min(1).default("rocha-turbo"),
   INTERNAL_JOB_SECRET: z.preprocess(emptyToUndefined, z.string().min(16).optional()),

@@ -65,9 +65,13 @@ export async function POST(request: NextRequest) {
     });
     webhookEventId = logged.id;
 
-    if (logged.duplicate) {
-      await updateWebhookEventStatus(webhookEventId, "ignored");
-      return NextResponse.json({ received: true, ignored: true, duplicate: true });
+    if (logged.duplicate && logged.existingStatus !== "failed") {
+      return NextResponse.json({
+        received: true,
+        ignored: true,
+        duplicate: true,
+        status: logged.existingStatus,
+      });
     }
 
     if (!parsed.payment) {
@@ -165,6 +169,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ received: true });
   } catch (error) {
+    console.error("[asaas] process failed", error);
     if (webhookEventId) {
       await updateWebhookEventStatus(webhookEventId, "failed", {
         error: error instanceof Error ? error.message : "unknown_error",

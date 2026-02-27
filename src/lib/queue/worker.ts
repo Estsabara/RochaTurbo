@@ -42,7 +42,7 @@ export function startWorkers(): Worker[] {
     },
     {
       connection: connection as never,
-      concurrency: 5,
+      concurrency: 15,
       prefix: env.QUEUE_PREFIX,
     },
   );
@@ -63,7 +63,7 @@ export function startWorkers(): Worker[] {
     },
     {
       connection: connection as never,
-      concurrency: 10,
+      concurrency: 20,
       prefix: env.QUEUE_PREFIX,
     },
   );

@@ -27,9 +27,12 @@ export async function POST(request: NextRequest) {
 
     webhookEventId = logged.id;
 
-    if (logged.duplicate) {
-      await updateWebhookEventStatus(webhookEventId, "ignored");
-      return NextResponse.json({ received: true, duplicate: true });
+    if (logged.duplicate && logged.existingStatus !== "failed") {
+      return NextResponse.json({
+        received: true,
+        duplicate: true,
+        status: logged.existingStatus,
+      });
     }
 
     const queued = await enqueueWhatsAppStatus({
@@ -47,6 +50,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ received: true, queued: false });
   } catch (error) {
+    console.error("[whatsapp/status] process failed", error);
     if (webhookEventId) {
       await updateWebhookEventStatus(webhookEventId, "failed", {
         error: error instanceof Error ? error.message : "unknown_error",

@@ -35,6 +35,13 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = JSON.parse(rawBody) as WhatsAppWebhookPayload;
+    const messages = extractMessages(payload);
+    if (messages.length === 0) {
+      // Meta may send status notifications to this endpoint when field subscriptions are broad.
+      // Ignore non-message payloads here to keep inbound queue focused on user messages.
+      return NextResponse.json({ received: true, ignored: true, reason: "no_messages" });
+    }
+
     const eventKey = extractInboundEventKey(payload);
 
     const logged = await logWebhookEvent({
@@ -51,9 +58,12 @@ export async function POST(request: NextRequest) {
 
     webhookEventId = logged.id;
 
-    if (logged.duplicate) {
-      await updateWebhookEventStatus(webhookEventId, "ignored");
-      return NextResponse.json({ received: true, duplicate: true });
+    if (logged.duplicate && logged.existingStatus !== "failed") {
+      return NextResponse.json({
+        received: true,
+        duplicate: true,
+        status: logged.existingStatus,
+      });
     }
 
     const queued = await enqueueWhatsAppInbound({
@@ -71,6 +81,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ received: true, queued: false });
   } catch (error) {
+    console.error("[whatsapp/inbound] process failed", error);
     if (webhookEventId) {
       await updateWebhookEventStatus(webhookEventId, "failed", {
         error: error instanceof Error ? error.message : "unknown_error",

@@ -1,6 +1,6 @@
 import { isValidCpf, normalizeCpf } from "@/lib/security/cpf";
 import { answerWithRag } from "@/lib/services/rag";
-import { findUserByCpf } from "@/lib/services/users";
+import { createOrUpdateUser, findUserByCpf, findUserByPhone } from "@/lib/services/users";
 import { createOtpChallenge, verifyLatestOtpChallenge } from "@/lib/services/otp";
 import {
   addConversationMessage,
@@ -21,6 +21,7 @@ import {
 } from "@/lib/services/subscriptions";
 import { sendWhatsAppTextMessage } from "@/lib/services/whatsapp";
 import { logAuditEvent } from "@/lib/services/audit";
+import { getServerEnv } from "@/lib/env";
 import { getServiceSupabaseClient } from "@/lib/supabase/server";
 import type { ModuleType } from "@/lib/types/domain";
 import { downloadWhatsAppMedia } from "@/lib/services/whatsapp-media";
@@ -29,6 +30,7 @@ import { transcribeAudioFile } from "@/lib/services/ai";
 const AUTO_BILLING_AMOUNT_BRL = 149.9;
 const AUTO_BILLING_DESCRIPTION = "Assinatura Rocha Turbo";
 const AUTO_BILLING_DUE_IN_DAYS = 2;
+const BOT_NAME = "Rocha Turbo";
 
 export interface WhatsAppTextMessage {
   id: string;
@@ -43,6 +45,12 @@ export interface WhatsAppWebhookPayload {
     changes?: Array<{
       value?: {
         messages?: WhatsAppTextMessage[];
+        contacts?: Array<{
+          wa_id?: string;
+          profile?: {
+            name?: string;
+          };
+        }>;
       };
     }>;
   }>;
@@ -57,6 +65,7 @@ export async function processWhatsAppInboundPayload(payload: WhatsAppWebhookPayl
 
 async function processMessage(message: WhatsAppTextMessage, rawPayload: unknown) {
   const phoneE164 = normalizePhone(message.from);
+  const contactName = extractContactProfileName(rawPayload, message.from);
   const session = await ensureSession({
     waContactId: phoneE164,
     state: "awaiting_cpf",
@@ -91,6 +100,7 @@ async function processMessage(message: WhatsAppTextMessage, rawPayload: unknown)
     sessionId: String(session.id),
     cpfCandidate: userText,
     phoneE164,
+    contactName,
   });
 }
 
@@ -98,43 +108,105 @@ async function handleCpfValidation(params: {
   sessionId: string;
   cpfCandidate: string;
   phoneE164: string;
+  contactName?: string | null;
 }) {
+  if (isGreetingMessage(params.cpfCandidate)) {
+    await sendWhatsAppTextMessage({
+      to: params.phoneE164,
+      message:
+        `Oi! Eu sou a ${BOT_NAME}.\n` +
+        "Para comecar com seguranca, me envie seu CPF (somente numeros, 11 digitos).",
+    });
+    return;
+  }
+
   const cpf = normalizeCpf(params.cpfCandidate);
   if (!isValidCpf(cpf)) {
     await sendWhatsAppTextMessage({
       to: params.phoneE164,
-      message: "Para acessar, envie seu CPF (somente numeros) com 11 digitos validos.",
+      message:
+        "Nao consegui validar esse CPF.\n" +
+        "Por favor, envie novamente somente com numeros (11 digitos). Exemplo: 12345678909.",
     });
     return;
   }
 
-  const user = await findUserByCpf(cpf);
+  let user = await findUserByCpf(cpf);
   if (!user) {
-    await sendWhatsAppTextMessage({
-      to: params.phoneE164,
-      message:
-        "CPF nao encontrado na base autorizada. Entre em contato com o suporte para liberar seu acesso.",
+    if (!isBillingDisabled()) {
+      await sendWhatsAppTextMessage({
+        to: params.phoneE164,
+        message:
+          "Seu CPF ainda nao esta cadastrado na base autorizada.\n" +
+          "Se quiser, nossa equipe faz a liberacao para voce.",
+      });
+      await logAuditEvent({
+        actor: "whatsapp_webhook",
+        action: "cpf_not_found",
+        entity: "users",
+        entityId: null,
+        metadata: {
+          phone: params.phoneE164,
+        },
+      });
+      return;
+    }
+
+    const userByPhone = await findUserByPhone(params.phoneE164);
+    if (userByPhone) {
+      await sendWhatsAppTextMessage({
+        to: params.phoneE164,
+        message:
+          "Este telefone ja esta vinculado a outro cadastro.\n" +
+          "Envie o CPF ja cadastrado ou fale com o suporte para atualizar seus dados.",
+      });
+
+      await safeAudit({
+        actor: "whatsapp_webhook",
+        action: "signup_phone_already_in_use",
+        entity: "users",
+        entityId: String(userByPhone.id),
+        metadata: {
+          phone: params.phoneE164,
+        },
+      });
+      return;
+    }
+
+    user = await createOrUpdateUser({
+      name: buildSignupName(params.contactName, params.phoneE164),
+      phoneE164: params.phoneE164,
+      cpf,
+      cpfEncrypted: cpf,
+      status: "active",
     });
-    await logAuditEvent({
+
+    await safeAudit({
       actor: "whatsapp_webhook",
-      action: "cpf_not_found",
+      action: "whatsapp_self_signup",
       entity: "users",
-      entityId: null,
+      entityId: String(user.id),
       metadata: {
         phone: params.phoneE164,
       },
     });
-    return;
+
+    await sendWhatsAppTextMessage({
+      to: params.phoneE164,
+      message: `${BOT_NAME}: cadastro realizado com sucesso. Vou te enviar o codigo de validacao agora.`,
+    });
   }
 
   const otp = await createOtpChallenge(String(user.id));
   await updateSessionAfterCpf(params.sessionId, String(user.id));
+  const firstName = getFirstName(String(user.name ?? ""));
 
   await sendWhatsAppTextMessage({
     to: params.phoneE164,
     message:
+      `${firstName ? `${firstName}, ` : ""}perfeito! Vamos continuar seu acesso.\n` +
       `Codigo de acesso: ${otp.code}\n` +
-      "Este codigo expira em 5 minutos. Responda com os 6 digitos para continuar.",
+      "Esse codigo expira em 5 minutos. Responda com os 6 digitos para validar.",
   });
 
   await logAuditEvent({
@@ -159,7 +231,9 @@ async function handleOtpValidation(params: {
   if (!isValid) {
     await sendWhatsAppTextMessage({
       to: params.phoneE164,
-      message: "Codigo invalido ou expirado. Tente novamente com o codigo mais recente.",
+      message:
+        "Codigo invalido ou expirado.\n" +
+        "Por favor, me envie o codigo mais recente que voce recebeu.",
     });
     return;
   }
@@ -171,12 +245,27 @@ async function handleOtpValidation(params: {
 
   const subscription = await getOrCreateSubscription(params.userId);
   await refreshUserEntitlement(params.userId);
+
+  if (isBillingDisabled()) {
+    await updateSubscriptionStatus(params.userId, "active");
+    await refreshUserEntitlement(params.userId);
+    await sendWhatsAppTextMessage({
+      to: params.phoneE164,
+      message:
+        "Acesso liberado com sucesso.\n" +
+        `Enquanto a cobranca estiver pausada, voce pode usar o ${BOT_NAME} normalmente.`,
+    });
+    return;
+  }
+
   const hasPremium = await hasPremiumEntitlement(params.userId);
 
   if (hasPremium) {
     await sendWhatsAppTextMessage({
       to: params.phoneE164,
-      message: "Acesso liberado. Pode enviar sua pergunta sobre operacao, KPIs e conformidade.",
+      message:
+        "Acesso liberado com sucesso.\n" +
+        `Eu sou a ${BOT_NAME} e ja posso te ajudar com operacao, KPI, checklist, marketing e SWOT.`,
     });
     return;
   }
@@ -194,7 +283,7 @@ async function handleOtpValidation(params: {
         pixPayload: billing.pixPayload,
         createdNow: billing.createdNow,
         intro:
-          "Acesso autenticado. Sua assinatura esta pendente, mas ja geramos sua cobranca automaticamente.",
+          "Seu acesso foi autenticado, mas a assinatura ainda esta pendente.",
       }),
     });
   } catch (error) {
@@ -211,8 +300,8 @@ async function handleOtpValidation(params: {
     await sendWhatsAppTextMessage({
       to: params.phoneE164,
       message:
-        "Acesso autenticado, mas nao consegui gerar sua cobranca agora. " +
-        "Fale com o suporte para receber o link de pagamento.",
+        "Seu acesso foi autenticado, mas nao consegui gerar a cobranca agora.\n" +
+        "Me chama novamente em alguns instantes ou fale com o suporte para o link de pagamento.",
     });
   }
 }
@@ -228,8 +317,9 @@ async function handleAuthenticatedMessage(params: {
   const subscription = await getOrCreateSubscription(params.userId);
   await refreshUserEntitlement(params.userId);
   const hasPremium = await hasPremiumEntitlement(params.userId);
+  const billingDisabled = isBillingDisabled();
 
-  if (!hasPremium) {
+  if (!hasPremium && !billingDisabled) {
     try {
       const billing = await ensureAutomatedBillingLink({
         userId: params.userId,
@@ -241,7 +331,7 @@ async function handleAuthenticatedMessage(params: {
           invoiceUrl: billing.invoiceUrl,
           pixPayload: billing.pixPayload,
           createdNow: billing.createdNow,
-          intro: "Seu acesso premium esta bloqueado por assinatura pendente.",
+          intro: "Seu acesso premium esta temporariamente bloqueado por assinatura pendente.",
         }),
       });
     } catch (error) {
@@ -258,8 +348,8 @@ async function handleAuthenticatedMessage(params: {
       await sendWhatsAppTextMessage({
         to: params.phoneE164,
         message:
-          "Seu acesso premium esta bloqueado por assinatura pendente. " +
-          "Nao consegui gerar o link agora, fale com o suporte.",
+          "Seu acesso premium esta bloqueado por assinatura pendente.\n" +
+          "Nao consegui gerar o link agora. Fale com o suporte para envio manual.",
       });
     }
     return;
@@ -270,13 +360,15 @@ async function handleAuthenticatedMessage(params: {
     const supportPhone = await getSupportPhone();
     await sendWhatsAppTextMessage({
       to: params.phoneE164,
-      message: `Para atendimento humano, fale com nossa equipe neste numero: ${supportPhone}`,
+      message: `Claro! Para atendimento humano, fale com nossa equipe neste numero: ${supportPhone}`,
     });
     return;
   }
 
   const moduleRequest = detectModuleRequest(params.text);
   if (moduleRequest) {
+    await sendLoadingMessage(params.phoneE164);
+
     try {
       const artifact = await generateModuleArtifact({
         userId: params.userId,
@@ -292,8 +384,8 @@ async function handleAuthenticatedMessage(params: {
       const signedUrl = fileId ? await getGeneratedFileSignedUrl(fileId) : null;
 
       const responseMessage =
-        `Documento do modulo ${moduleRequest} gerado com sucesso.` +
-        (signedUrl ? `\nDownload: ${signedUrl}` : "\nArquivo disponivel no CRM.");
+        `Pronto! Finalizei o modulo ${moduleRequest}.` +
+        (signedUrl ? `\nVoce pode baixar aqui: ${signedUrl}` : "\nArquivo disponivel no CRM.");
 
       const conversation = await ensureOpenConversation(params.userId);
       await addConversationMessage({
@@ -346,6 +438,8 @@ async function handleAuthenticatedMessage(params: {
       role: row.direction === "outbound" ? ("assistant" as const) : ("user" as const),
       content: String(row.content_text),
     }));
+
+  await sendLoadingMessage(params.phoneE164);
 
   const ragResult = await answerWithRag(params.text, history);
 
@@ -536,20 +630,20 @@ function formatPendingPaymentMessage(input: {
   pixPayload: string | null;
   createdNow: boolean;
 }): string {
-  const lines = [input.intro];
+  const lines = [`${BOT_NAME}: ${input.intro}`];
   if (input.createdNow) {
-    lines.push("Cobranca gerada agora.");
+    lines.push("Acabei de gerar sua cobranca.");
   } else {
     lines.push("Reenviei sua cobranca pendente.");
   }
   if (input.invoiceUrl) {
-    lines.push(`Link para pagamento: ${input.invoiceUrl}`);
+    lines.push(`Link de pagamento: ${input.invoiceUrl}`);
   }
   if (input.pixPayload) {
     lines.push(`PIX copia e cola: ${input.pixPayload}`);
   }
   if (!input.invoiceUrl && !input.pixPayload) {
-    lines.push("Nao recebi link/PIX do provedor no momento, fale com o suporte.");
+    lines.push("Nao recebi link/PIX do provedor no momento. Fale com o suporte.");
   } else {
     lines.push("Assim que o pagamento for confirmado, seu acesso sera liberado automaticamente.");
   }
@@ -581,4 +675,61 @@ function detectModuleRequest(text: string): ModuleType | null {
   if (/kpi|indicador|pareto|ishikawa|histograma/.test(normalized)) return "kpi";
 
   return null;
+}
+
+function isGreetingMessage(text: string): boolean {
+  return /\b(oi|ola|ol[aá]|bom dia|boa tarde|boa noite|e ai|blz|inicio|comecar)\b/i.test(text.trim());
+}
+
+function getFirstName(name: string): string {
+  const clean = name.trim();
+  if (!clean) return "";
+  return clean.split(/\s+/)[0] ?? "";
+}
+
+async function sendLoadingMessage(phoneE164: string): Promise<void> {
+  try {
+    await sendWhatsAppTextMessage({
+      to: phoneE164,
+      message: `${BOT_NAME}: recebi sua mensagem. Um instante enquanto preparo a melhor resposta para voce.`,
+    });
+  } catch {
+    // non-blocking helper message
+  }
+}
+
+function extractContactProfileName(rawPayload: unknown, fromWaId: string): string | null {
+  const payload = rawPayload as WhatsAppWebhookPayload;
+  const target = normalizeDigits(fromWaId);
+
+  for (const entry of payload.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      for (const contact of change.value?.contacts ?? []) {
+        const waId = normalizeDigits(String(contact.wa_id ?? ""));
+        if (waId && waId === target) {
+          const name = String(contact.profile?.name ?? "").trim();
+          if (name) return name;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeDigits(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+function buildSignupName(contactName: string | null | undefined, phoneE164: string): string {
+  const cleanName = String(contactName ?? "").trim();
+  if (cleanName) return cleanName;
+
+  const digits = normalizeDigits(phoneE164);
+  const suffix = digits.slice(-4) || "novo";
+  return `Cliente ${suffix}`;
+}
+
+function isBillingDisabled(): boolean {
+  return getServerEnv().BILLING_DISABLED;
 }

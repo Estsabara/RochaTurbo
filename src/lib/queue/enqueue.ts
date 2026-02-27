@@ -48,12 +48,18 @@ async function enqueue<T>(queueName: QueueName, jobName: string, payload: T, opt
 
 export async function enqueueWhatsAppInbound(payload: WhatsAppInboundQueuePayload): Promise<boolean> {
   const jobId = payload.webhookEventId ? `wa-inbound-${payload.webhookEventId}` : undefined;
-  return enqueue(QUEUE_NAMES.whatsappInbound, "whatsapp-inbound", payload, { jobId });
+  return enqueue(QUEUE_NAMES.whatsappInbound, "whatsapp-inbound", payload, {
+    jobId,
+    attempts: 1,
+  });
 }
 
 export async function enqueueWhatsAppStatus(payload: WhatsAppStatusQueuePayload): Promise<boolean> {
   const jobId = payload.webhookEventId ? `wa-status-${payload.webhookEventId}` : undefined;
-  return enqueue(QUEUE_NAMES.whatsappStatus, "whatsapp-status", payload, { jobId });
+  return enqueue(QUEUE_NAMES.whatsappStatus, "whatsapp-status", payload, {
+    jobId,
+    attempts: 1,
+  });
 }
 
 export async function enqueueInternalJob(
