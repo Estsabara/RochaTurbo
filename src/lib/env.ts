@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { loadEnvConfig } from "@next/env";
 
 const emptyToUndefined = (value: unknown) =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
@@ -37,9 +38,17 @@ const serverEnvSchema = z.object({
 type ServerEnv = z.infer<typeof serverEnvSchema>;
 
 let cachedEnv: ServerEnv | null = null;
+let envLoaded = false;
+
+function ensureEnvLoaded() {
+  if (envLoaded) return;
+  loadEnvConfig(process.cwd(), process.env.NODE_ENV !== "production");
+  envLoaded = true;
+}
 
 export function getServerEnv(): ServerEnv {
   if (cachedEnv) return cachedEnv;
+  ensureEnvLoaded();
   const parsed = serverEnvSchema.safeParse(process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues
