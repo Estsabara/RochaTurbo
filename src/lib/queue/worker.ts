@@ -90,6 +90,20 @@ export function startWorkers(): Worker[] {
 
   for (const worker of [inboundWorker, statusWorker, internalWorker]) {
     worker.on("failed", async (job, error) => {
+      console.error(
+        `[worker:${worker.name}] job failed`,
+        JSON.stringify(
+          {
+            jobName: job?.name ?? "unknown",
+            jobId: job?.id ? String(job.id) : null,
+            webhookEventId: job?.data?.webhookEventId ?? null,
+            error: error.message,
+          },
+          null,
+          2,
+        ),
+      );
+
       try {
         if (job?.data?.webhookEventId) {
           await updateWebhookEventStatus(Number(job.data.webhookEventId), "failed", {

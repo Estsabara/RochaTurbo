@@ -31,6 +31,10 @@ export async function POST(request: NextRequest) {
     const signature = request.headers.get("x-hub-signature-256");
 
     if (!verifyMetaWebhookSignature(rawBody, signature)) {
+      console.warn("[whatsapp/inbound] invalid webhook signature", {
+        hasSignature: Boolean(signature),
+        userAgent: request.headers.get("user-agent"),
+      });
       return NextResponse.json({ error: "Invalid webhook signature" }, { status: 401 });
     }
 
@@ -39,6 +43,7 @@ export async function POST(request: NextRequest) {
     if (messages.length === 0) {
       // Meta may send status notifications to this endpoint when field subscriptions are broad.
       // Ignore non-message payloads here to keep inbound queue focused on user messages.
+      console.info("[whatsapp/inbound] ignored payload without messages");
       return NextResponse.json({ received: true, ignored: true, reason: "no_messages" });
     }
 
