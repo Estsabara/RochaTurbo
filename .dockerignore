@@ -1,0 +1,8 @@
+﻿node_modules
+.next
+.git
+n8n
+supabase/backups
+*.log
+npm-debug.log*
+.env*

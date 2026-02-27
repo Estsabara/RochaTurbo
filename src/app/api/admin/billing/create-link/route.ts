@@ -4,6 +4,7 @@ import { assertAdminRequest } from "@/lib/http/admin-auth";
 import { normalizeCpf } from "@/lib/security/cpf";
 import { createAsaasBillingLink, mapAsaasPaymentStatus } from "@/lib/services/asaas";
 import { logAuditEvent } from "@/lib/services/audit";
+import { refreshUserEntitlement } from "@/lib/services/entitlements";
 import { upsertPayment, getOrCreateSubscription, updateSubscriptionStatus } from "@/lib/services/subscriptions";
 import { sendWhatsAppTextMessage } from "@/lib/services/whatsapp";
 import { getServiceSupabaseClient } from "@/lib/supabase/server";
@@ -18,7 +19,7 @@ const payloadSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    const admin = await assertAdminRequest(request);
     const body = await request.json();
     const parsed = payloadSchema.parse(body);
 
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
     });
 
     await updateSubscriptionStatus(parsed.user_id, "pending_payment");
+    await refreshUserEntitlement(parsed.user_id);
 
     if (parsed.send_via_whatsapp && billing.invoiceUrl) {
       await sendWhatsAppTextMessage({
@@ -79,7 +81,7 @@ export async function POST(request: NextRequest) {
     }
 
     await logAuditEvent({
-      actor: "admin_api",
+      actor: admin.actor,
       action: "create_billing_link",
       entity: "payments",
       entityId: String(payment.id),

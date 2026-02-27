@@ -26,7 +26,7 @@ export async function getOrCreateSubscription(userId: string) {
 }
 
 export function isSubscriptionActive(status: SubscriptionStatus | null | undefined): boolean {
-  return status === "active";
+  return status === "active" || status === "trial_active";
 }
 
 interface UpsertPaymentInput {
@@ -85,4 +85,38 @@ export async function updateSubscriptionStatus(userId: string, status: Subscript
 
   if (error) throw error;
   return data;
+}
+
+export interface PendingPaymentSnapshot {
+  id: string;
+  asaas_payment_id: string;
+  invoice_url: string | null;
+  pix_payload: string | null;
+  amount_cents: number | null;
+  due_date: string | null;
+  created_at: string;
+}
+
+export async function getLatestPendingPayment(userId: string): Promise<PendingPaymentSnapshot | null> {
+  const supabase = getServiceSupabaseClient();
+  const { data, error } = await supabase
+    .from("payments")
+    .select("id, asaas_payment_id, invoice_url, pix_payload, amount_cents, due_date, created_at")
+    .eq("user_id", userId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id: String(data.id),
+    asaas_payment_id: String(data.asaas_payment_id),
+    invoice_url: (data.invoice_url as string | null) ?? null,
+    pix_payload: (data.pix_payload as string | null) ?? null,
+    amount_cents: (data.amount_cents as number | null) ?? null,
+    due_date: (data.due_date as string | null) ?? null,
+    created_at: String(data.created_at),
+  };
 }

@@ -4,7 +4,7 @@ import { getServiceSupabaseClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    await assertAdminRequest(request);
     const supabase = getServiceSupabaseClient();
     const { data, error } = await supabase.rpc("get_dashboard_metrics");
     if (error) throw error;

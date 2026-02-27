@@ -1,21 +1,30 @@
 import Link from "next/link";
 import { CrmShell } from "@/components/crm-shell";
+import { requireAdminSessionForPage } from "@/lib/auth/admin";
 
 const endpointList = [
   "POST /api/webhooks/whatsapp/inbound",
   "POST /api/webhooks/whatsapp/status",
   "POST /api/webhooks/asaas",
+  "POST /api/billing/coupons/redeem",
+  "GET /api/billing/entitlement",
   "POST /api/admin/users",
+  "POST /api/admin/coupons",
+  "PATCH /api/admin/coupons/:id",
   "POST /api/admin/billing/create-link",
   "POST /api/admin/knowledge/upload",
-  "POST /api/monthly/compute",
+  "POST /api/modules/*",
+  "POST /api/internal/jobs/*",
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  await requireAdminSessionForPage();
+
   return (
     <CrmShell
       title="Rocha Turbo"
-      subtitle="Arquitetura ativa: WhatsApp Cloud API + n8n + Supabase + Next.js + OpenAI + Asaas"
+      subtitle="Arquitetura ativa: WhatsApp Cloud API + Supabase + Next.js + OpenAI + Asaas + Redis/BullMQ"
+      showSignOut
     >
       <section className="grid gap-6 md:grid-cols-2">
         <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -23,9 +32,10 @@ export default function HomePage() {
           <ul className="mt-3 space-y-2 text-sm text-slate-700">
             <li>Dominio 100% centrado em usuario (sem entidade posto/empresa).</li>
             <li>Autenticacao CPF + OTP via WhatsApp pronta nos webhooks.</li>
+            <li>Fila assincrona com BullMQ para webhooks e jobs internos.</li>
             <li>Motor de KPI v1.1 com persistencia em Supabase.</li>
             <li>RAG com citacoes a partir da base documental.</li>
-            <li>Cobranca via Asaas com webhook de liberacao de acesso.</li>
+            <li>Cobranca Asaas + entitlement por cupom, trial e inadimplencia.</li>
           </ul>
           <div className="mt-4 flex flex-wrap gap-2">
             <Link

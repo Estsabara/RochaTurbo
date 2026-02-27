@@ -17,7 +17,9 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
   const [payments, users] = await Promise.all([getRecentPayments(100), getUsersForDashboard(200)]);
 
   return (
-    <CrmShell title="CRM Cobranca" subtitle="Acompanhamento de pagamentos e assinaturas via Asaas">
+    <CrmShell title="CRM Cobranca" subtitle="Acompanhamento de pagamentos e assinaturas via Asaas"
+      showSignOut
+    >
       {params.ok ? (
         <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {params.ok}
@@ -129,3 +131,6 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
     </CrmShell>
   );
 }
+
+
+

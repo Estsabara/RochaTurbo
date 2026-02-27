@@ -15,7 +15,7 @@ const jetBrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Rocha Turbo CRM",
   description:
-    "Sistema Rocha Turbo: WhatsApp + Supabase + n8n com autenticacao CPF + OTP, RAG e painel operacional.",
+    "Sistema Rocha Turbo: WhatsApp + Supabase + Redis/BullMQ com autenticacao CPF + OTP, RAG e painel operacional.",
 };
 
 export default function RootLayout({
@@ -26,6 +26,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body
+        suppressHydrationWarning
         className={`${manrope.variable} ${jetBrainsMono.variable} antialiased`}
       >
         {children}

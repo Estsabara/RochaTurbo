@@ -20,6 +20,7 @@ export default async function UsuariosPage({ searchParams }: UsuariosPageProps) 
     <CrmShell
       title="CRM Usuarios"
       subtitle="Gestao operacional de usuarios (criar, ativar, bloquear e cancelar)"
+      showSignOut
     >
       {params.ok ? (
         <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
@@ -143,3 +144,6 @@ export default async function UsuariosPage({ searchParams }: UsuariosPageProps) 
     </CrmShell>
   );
 }
+
+
+

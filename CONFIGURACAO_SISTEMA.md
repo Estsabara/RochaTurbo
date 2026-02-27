@@ -17,6 +17,7 @@ As migrations do Rocha Turbo ja foram aplicadas no seu Supabase remoto com suces
 2. `20260224121500_support_functions_and_storage.sql`
 3. `20260224122000_match_knowledge_chunks.sql`
 4. `20260224122500_message_status_events.sql`
+5. `20260225110000_admin_login_security.sql`
 
 ## 2) Variaveis de ambiente obrigatorias
 
@@ -40,7 +41,7 @@ ASAAS_API_BASE=https://api.asaas.com/v3
 ASAAS_WEBHOOK_TOKEN=
 
 OTP_SECRET=defina-um-segredo-longo-com-16-ou-mais-caracteres
-ADMIN_API_TOKEN=defina-um-token-admin-forte
+ADMIN_API_TOKEN=defina-um-token-admin-forte  # opcional (fallback para integracoes servidor-servidor)
 ```
 
 ## 3) Supabase
@@ -59,7 +60,7 @@ No painel do Supabase:
 
 Verifique no Supabase Studio:
 
-1. Tabelas principais existem (`users`, `sessions`, `messages`, `subscriptions`, `payments`, `monthly_inputs`, `monthly_kpis`, `knowledge_docs`, `knowledge_chunks`).
+1. Tabelas principais existem (`users`, `sessions`, `messages`, `subscriptions`, `payments`, `monthly_inputs`, `monthly_kpis`, `knowledge_docs`, `knowledge_chunks`, `admin_profiles`).
 2. Buckets existem:
    - `knowledge-base`
    - `conversation-media`
@@ -76,8 +77,26 @@ O projeto usa RLS com regra administrativa via:
 1. `auth.role() = 'service_role'` ou
 2. claim JWT `app_role = admin`
 
-No fluxo atual, as APIs server-side usam `service_role`.
+No fluxo atual, CRM e APIs admin aceitam sessao Supabase de admin ativo (`admin_profiles.is_active = true`).
+Como fallback de integracao, `ADMIN_API_TOKEN` continua aceito nos endpoints administrativos.
 
+
+### 3.4 Bootstrap do primeiro admin (obrigatorio)
+
+1. Crie um usuario em `Supabase > Authentication > Users` com email e senha.
+2. Pegue o `id` (UUID) do usuario criado.
+3. Execute no SQL Editor:
+
+```sql
+select public.upsert_admin_profile(
+  'UUID_DO_AUTH_USER',
+  'admin@seudominio.com',
+  'Nome Admin',
+  true
+);
+```
+
+4. Acesse `/login` e autentique com email/senha.
 ## 4) WhatsApp Cloud API (Meta)
 
 ### 4.1 Dados necessarios
@@ -190,7 +209,7 @@ npm run build
 
 ## 10) Teste ponta a ponta (checklist rapido)
 
-1. Criar usuario via `POST /api/admin/users`.
+1. Entrar via `/login` com usuario admin ativo em `admin_profiles`.
 2. Enviar mensagem no WhatsApp com CPF.
 3. Receber OTP.
 4. Validar OTP.
@@ -200,6 +219,7 @@ npm run build
 8. Webhook deve ativar assinatura e liberar acesso.
 9. Perguntar algo via WhatsApp e validar resposta RAG com citacoes.
 10. Verificar CRM em `/crm/dashboard`, `/crm/conversas`, `/crm/cobranca`.
+11. Validar logout (botao `Sair`) e bloqueio de acesso sem sessao.
 
 ## 11) Deploy/producao
 
@@ -231,3 +251,4 @@ npm run db:push
 1. Validar token do webhook (`asaas-access-token`).
 2. Verificar payload recebido em `/api/webhooks/asaas`.
 3. Confirmar se `externalReference` foi enviado com `user_id`.
+

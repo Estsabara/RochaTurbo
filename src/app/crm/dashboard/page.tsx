@@ -19,7 +19,7 @@ export default async function CrmDashboardPage() {
     (metrics as { conversations?: Record<string, number> } | null)?.conversations ?? {};
 
   return (
-    <CrmShell title="CRM Dashboard" subtitle="Visao operacional em tempo real do atendimento WhatsApp">
+    <CrmShell title="CRM Dashboard" subtitle="Visao operacional em tempo real do atendimento WhatsApp" showSignOut>
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Usuarios ativos" value={usersStats.active_users ?? 0} />
         <StatCard label="Conversas abertas" value={conversationStats.open_conversations ?? 0} />
@@ -89,3 +89,4 @@ export default async function CrmDashboardPage() {
     </CrmShell>
   );
 }
+

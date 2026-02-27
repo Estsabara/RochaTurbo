@@ -17,6 +17,10 @@ const INTENT_KEYWORDS: Array<{ intent: IntentType; patterns: RegExp[] }> = [
     intent: "kpi_explain",
     patterns: [/mix/i, /gap/i, /margem/i, /frentista/i, /conveniencia/i],
   },
+  {
+    intent: "faq",
+    patterns: [/swot/i, /fofa/i, /checklist/i, /promoc/i, /marketing/i, /campanha/i],
+  },
 ];
 
 export function inferIntent(message: string): IntentType {

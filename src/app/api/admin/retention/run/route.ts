@@ -4,7 +4,7 @@ import { getServiceSupabaseClient } from "@/lib/supabase/server";
 
 export async function POST(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    await assertAdminRequest(request);
     const supabase = getServiceSupabaseClient();
     const { data, error } = await supabase.rpc("run_retention_cleanup");
     if (error) throw error;

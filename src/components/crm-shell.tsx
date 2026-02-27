@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
+import { signOutAction } from "@/lib/auth/actions";
 
 const navItems = [
   { href: "/", label: "Visao Geral" },
@@ -10,7 +11,12 @@ const navItems = [
   { href: "/crm/configuracoes", label: "Configuracoes" },
 ];
 
-export function CrmShell(props: { title: string; subtitle?: string; children: ReactNode }) {
+export function CrmShell(props: {
+  title: string;
+  subtitle?: string;
+  showSignOut?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_20%,#d9f7e6_0%,#f8faf8_45%,#f1f5ff_100%)] text-slate-900">
       <header className="border-b border-slate-200/70 bg-white/80 backdrop-blur">
@@ -19,17 +25,29 @@ export function CrmShell(props: { title: string; subtitle?: string; children: Re
             <h1 className="text-xl font-semibold tracking-tight">{props.title}</h1>
             {props.subtitle ? <p className="text-sm text-slate-600">{props.subtitle}</p> : null}
           </div>
-          <nav className="flex flex-wrap gap-2">
-            {navItems.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 transition hover:border-emerald-400 hover:text-emerald-700"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
+          <div className="flex flex-wrap items-center gap-2">
+            <nav className="flex flex-wrap gap-2">
+              {navItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 transition hover:border-emerald-400 hover:text-emerald-700"
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+            {props.showSignOut ? (
+              <form action={signOutAction}>
+                <button
+                  type="submit"
+                  className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm text-rose-700 transition hover:border-rose-400 hover:bg-rose-100"
+                >
+                  Sair
+                </button>
+              </form>
+            ) : null}
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-8">{props.children}</main>

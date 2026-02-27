@@ -29,6 +29,7 @@ export default async function ConfiguracoesPage({ searchParams }: ConfiguracoesP
     <CrmShell
       title="CRM Configuracoes"
       subtitle="Parametros globais (suporte, retencao, constantes de KPI e versao de prompt)"
+      showSignOut
     >
       {params.ok ? (
         <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
@@ -182,3 +183,6 @@ export default async function ConfiguracoesPage({ searchParams }: ConfiguracoesP
     </CrmShell>
   );
 }
+
+
+

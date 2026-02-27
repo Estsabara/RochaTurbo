@@ -3,9 +3,11 @@ import { z } from "zod";
 import { getServerEnv } from "@/lib/env";
 import { mapAsaasPaymentStatus } from "@/lib/services/asaas";
 import { logAuditEvent } from "@/lib/services/audit";
+import { refreshUserEntitlement } from "@/lib/services/entitlements";
 import { updateSubscriptionStatus, upsertPayment } from "@/lib/services/subscriptions";
 import { getServiceSupabaseClient } from "@/lib/supabase/server";
 import { sendWhatsAppTextMessage } from "@/lib/services/whatsapp";
+import { logWebhookEvent, updateWebhookEventStatus } from "@/lib/services/webhook-events";
 
 const asaasWebhookSchema = z.object({
   event: z.string(),
@@ -38,6 +40,8 @@ const asaasWebhookSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  let webhookEventId: number | null = null;
+
   try {
     const env = getServerEnv();
     const token = request.headers.get("asaas-access-token");
@@ -48,7 +52,26 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const parsed = asaasWebhookSchema.parse(body);
 
+    const eventKey = parsed.payment?.id ? `${parsed.payment.id}|${parsed.event}` : parsed.event;
+    const logged = await logWebhookEvent({
+      provider: "asaas",
+      eventType: parsed.event,
+      eventKey,
+      payload: (body as Record<string, unknown>) ?? {},
+      headers: {
+        "asaas-access-token": token ? "present" : "missing",
+        "user-agent": request.headers.get("user-agent"),
+      },
+    });
+    webhookEventId = logged.id;
+
+    if (logged.duplicate) {
+      await updateWebhookEventStatus(webhookEventId, "ignored");
+      return NextResponse.json({ received: true, ignored: true, duplicate: true });
+    }
+
     if (!parsed.payment) {
+      await updateWebhookEventStatus(webhookEventId, "ignored");
       return NextResponse.json({ received: true, ignored: true });
     }
 
@@ -108,6 +131,7 @@ export async function POST(request: NextRequest) {
           : "pending_payment";
 
     await updateSubscriptionStatus(userId, subscriptionStatus);
+    await refreshUserEntitlement(userId);
 
     if (paymentStatus === "received") {
       const { data: user } = await supabase
@@ -137,8 +161,19 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    await updateWebhookEventStatus(webhookEventId, "processed");
+
     return NextResponse.json({ received: true });
   } catch (error) {
+    if (webhookEventId) {
+      await updateWebhookEventStatus(webhookEventId, "failed", {
+        error: error instanceof Error ? error.message : "unknown_error",
+        incrementRetry: true,
+      }).catch(() => {
+        // noop
+      });
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid payload", details: error.issues }, { status: 400 });
     }

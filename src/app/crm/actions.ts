@@ -2,15 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { requireAdminSessionForAction } from "@/lib/auth/admin";
 import { isValidCpf, normalizeCpf } from "@/lib/security/cpf";
 import { createAsaasBillingLink, mapAsaasPaymentStatus } from "@/lib/services/asaas";
 import { createEmbedding } from "@/lib/services/ai";
 import { logAuditEvent } from "@/lib/services/audit";
+import { refreshUserEntitlement } from "@/lib/services/entitlements";
 import { computeAndUpsertMonthlyKpis, upsertMonthlyInput } from "@/lib/services/monthly";
 import { getOrCreateSubscription, updateSubscriptionStatus, upsertPayment } from "@/lib/services/subscriptions";
 import { createOrUpdateUser, updateUserStatus } from "@/lib/services/users";
-import { getServiceSupabaseClient } from "@/lib/supabase/server";
 import { sendWhatsAppTextMessage } from "@/lib/services/whatsapp";
+import { getServiceSupabaseClient } from "@/lib/supabase/server";
 
 function go(path: string, ok?: string, err?: string): never {
   if (err) redirect(`${path}?err=${encodeURIComponent(err)}`);
@@ -26,6 +28,8 @@ function splitIntoChunks(text: string, size = 900) {
 
 export async function createUserAction(formData: FormData): Promise<never> {
   const path = "/crm/usuarios";
+  const admin = await requireAdminSessionForAction();
+
   try {
     const name = String(formData.get("name") ?? "").trim();
     const phone = String(formData.get("phone_e164") ?? "").trim();
@@ -51,7 +55,7 @@ export async function createUserAction(formData: FormData): Promise<never> {
     });
 
     await logAuditEvent({
-      actor: "crm_server_action",
+      actor: admin.actor,
       action: "upsert_user",
       entity: "users",
       entityId: String(user.id),
@@ -68,6 +72,8 @@ export async function createUserAction(formData: FormData): Promise<never> {
 
 export async function setUserStatusAction(formData: FormData): Promise<never> {
   const path = "/crm/usuarios";
+  const admin = await requireAdminSessionForAction();
+
   try {
     const userId = String(formData.get("user_id") ?? "").trim();
     const status = String(formData.get("status") ?? "").trim() as
@@ -83,12 +89,13 @@ export async function setUserStatusAction(formData: FormData): Promise<never> {
 
     await updateUserStatus(userId, status);
     await logAuditEvent({
-      actor: "crm_server_action",
+      actor: admin.actor,
       action: "update_user_status",
       entity: "users",
       entityId: userId,
       metadata: { status },
     });
+
     revalidatePath("/crm/usuarios");
     revalidatePath("/crm/dashboard");
     go(path, "Status atualizado.");
@@ -99,6 +106,8 @@ export async function setUserStatusAction(formData: FormData): Promise<never> {
 
 export async function createBillingLinkAction(formData: FormData): Promise<never> {
   const path = "/crm/cobranca";
+  const admin = await requireAdminSessionForAction();
+
   try {
     const userId = String(formData.get("user_id") ?? "").trim();
     const amountBrl = Number(String(formData.get("amount_brl") ?? "").trim());
@@ -152,6 +161,7 @@ export async function createBillingLinkAction(formData: FormData): Promise<never
     });
 
     await updateSubscriptionStatus(userId, "pending_payment");
+    await refreshUserEntitlement(userId);
 
     if (sendViaWhatsapp && billing.invoiceUrl) {
       await sendWhatsAppTextMessage({
@@ -164,7 +174,7 @@ export async function createBillingLinkAction(formData: FormData): Promise<never
     }
 
     await logAuditEvent({
-      actor: "crm_server_action",
+      actor: admin.actor,
       action: "create_billing_link",
       entity: "payments",
       entityId: billing.asaasPaymentId,
@@ -184,6 +194,8 @@ export async function createBillingLinkAction(formData: FormData): Promise<never
 
 export async function uploadKnowledgeAction(formData: FormData): Promise<never> {
   const path = "/crm/configuracoes";
+  const admin = await requireAdminSessionForAction();
+
   try {
     const title = String(formData.get("title") ?? "").trim();
     const source = String(formData.get("source") ?? "").trim();
@@ -225,7 +237,7 @@ export async function uploadKnowledgeAction(formData: FormData): Promise<never> 
     if (chunksError) throw chunksError;
 
     await logAuditEvent({
-      actor: "crm_server_action",
+      actor: admin.actor,
       action: "upload_knowledge_document",
       entity: "knowledge_docs",
       entityId: String(doc.id),
@@ -241,6 +253,8 @@ export async function uploadKnowledgeAction(formData: FormData): Promise<never> 
 
 export async function runRetentionAction(): Promise<never> {
   const path = "/crm/configuracoes";
+  await requireAdminSessionForAction();
+
   try {
     const supabase = getServiceSupabaseClient();
     const { data, error } = await supabase.rpc("run_retention_cleanup");
@@ -254,6 +268,8 @@ export async function runRetentionAction(): Promise<never> {
 
 export async function computeMonthlyAction(formData: FormData): Promise<never> {
   const path = "/crm/configuracoes";
+  await requireAdminSessionForAction();
+
   try {
     const userId = String(formData.get("user_id") ?? "").trim();
     const monthRef = String(formData.get("month_ref") ?? "").trim();

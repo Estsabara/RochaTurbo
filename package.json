@@ -9,15 +9,21 @@
     "lint": "eslint",
     "db:push": "supabase db push",
     "db:reset": "supabase db reset",
-    "kb:ingest": "python scripts/ingest_knowledge.py"
+    "kb:ingest": "python scripts/ingest_knowledge.py",
+    "worker": "tsx src/worker/index.ts",
+    "scheduler": "tsx src/worker/scheduler.ts"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.97.0",
+    "bullmq": "^5.70.1",
     "date-fns": "^4.1.0",
+    "ioredis": "^5.10.0",
     "next": "16.1.6",
     "openai": "^6.25.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "server-only": "^0.0.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -28,6 +34,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

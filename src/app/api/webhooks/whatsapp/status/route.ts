@@ -1,39 +1,61 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServiceSupabaseClient } from "@/lib/supabase/server";
-
-interface WhatsAppStatusPayload {
-  entry?: Array<{
-    changes?: Array<{
-      value?: {
-        statuses?: Array<{
-          id?: string;
-          recipient_id?: string;
-          status?: string;
-        }>;
-      };
-    }>;
-  }>;
-}
+﻿import { NextRequest, NextResponse } from "next/server";
+import {
+  extractStatuses,
+  processWhatsAppStatusPayload,
+  type WhatsAppStatusPayload,
+} from "@/lib/services/whatsapp-status-processor";
+import { enqueueWhatsAppStatus } from "@/lib/queue/enqueue";
+import { logWebhookEvent, updateWebhookEventStatus } from "@/lib/services/webhook-events";
 
 export async function POST(request: NextRequest) {
+  let webhookEventId: number | null = null;
+
   try {
     const payload = (await request.json()) as WhatsAppStatusPayload;
-    const supabase = getServiceSupabaseClient();
-    const statuses = extractStatuses(payload);
+    const eventKey = extractStatusEventKey(payload);
 
-    if (statuses.length > 0) {
-      const rows = statuses.map((status) => ({
-        wa_message_id: status.id,
-        recipient_id: status.recipient_id,
-        status: status.status,
-        raw_payload: payload as Record<string, unknown>,
-      }));
-      const { error } = await supabase.from("message_status_events").insert(rows);
-      if (error) throw error;
+    const logged = await logWebhookEvent({
+      provider: "whatsapp_status",
+      eventType: "message_status",
+      eventKey,
+      payload: (payload as Record<string, unknown>) ?? {},
+      headers: {
+        "user-agent": request.headers.get("user-agent"),
+      },
+      status: "received",
+    });
+
+    webhookEventId = logged.id;
+
+    if (logged.duplicate) {
+      await updateWebhookEventStatus(webhookEventId, "ignored");
+      return NextResponse.json({ received: true, duplicate: true });
     }
 
-    return NextResponse.json({ received: true });
+    const queued = await enqueueWhatsAppStatus({
+      webhookEventId,
+      payload: (payload as Record<string, unknown>) ?? {},
+    });
+
+    if (queued) {
+      await updateWebhookEventStatus(webhookEventId, "queued");
+      return NextResponse.json({ received: true, queued: true }, { status: 202 });
+    }
+
+    await processWhatsAppStatusPayload(payload);
+    await updateWebhookEventStatus(webhookEventId, "processed");
+
+    return NextResponse.json({ received: true, queued: false });
   } catch (error) {
+    if (webhookEventId) {
+      await updateWebhookEventStatus(webhookEventId, "failed", {
+        error: error instanceof Error ? error.message : "unknown_error",
+        incrementRetry: true,
+      }).catch(() => {
+        // noop
+      });
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to process status webhook" },
       { status: 500 },
@@ -41,20 +63,15 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function extractStatuses(payload: WhatsAppStatusPayload) {
-  const result: Array<{ id: string; recipient_id: string | null; status: string }> = [];
-  for (const entry of payload.entry ?? []) {
-    for (const change of entry.changes ?? []) {
-      for (const status of change.value?.statuses ?? []) {
-        if (status.id && status.status) {
-          result.push({
-            id: status.id,
-            recipient_id: status.recipient_id ?? null,
-            status: status.status,
-          });
-        }
-      }
-    }
+function extractStatusEventKey(payload: WhatsAppStatusPayload): string | null {
+  const ids = extractStatuses(payload)
+    .map((status) => String(status.id || "").trim())
+    .filter((id) => id.length > 0)
+    .slice(0, 10);
+
+  if (ids.length === 0) {
+    return null;
   }
-  return result;
+
+  return ids.join("|");
 }

@@ -10,6 +10,10 @@ const payloadSchema = z.object({
   source: z.string().min(3),
   version: z.string().optional(),
   section_hint: z.string().optional(),
+  domain: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
+  priority: z.number().int().min(1).max(5).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   text: z.string().min(20),
 });
 
@@ -24,7 +28,7 @@ function splitIntoChunks(text: string, size = 900) {
 
 export async function POST(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    const admin = await assertAdminRequest(request);
     const body = await request.json();
     const parsed = payloadSchema.parse(body);
     const supabase = getServiceSupabaseClient();
@@ -36,6 +40,12 @@ export async function POST(request: NextRequest) {
         source: parsed.source,
         version: parsed.version ?? null,
         status: "active",
+        metadata_json: {
+          domain: parsed.domain ?? "general",
+          tags: parsed.tags ?? [],
+          priority: parsed.priority ?? 3,
+          ...(parsed.metadata ?? {}),
+        },
       })
       .select("*")
       .single();
@@ -51,6 +61,11 @@ export async function POST(request: NextRequest) {
         section_hint: parsed.section_hint ?? null,
         chunk_text: chunks[i],
         embedding,
+        metadata_json: {
+          domain: parsed.domain ?? "general",
+          tags: parsed.tags ?? [],
+          priority: parsed.priority ?? 3,
+        },
       });
     }
 
@@ -58,7 +73,7 @@ export async function POST(request: NextRequest) {
     if (chunkError) throw chunkError;
 
     await logAuditEvent({
-      actor: "admin_api",
+      actor: admin.actor,
       action: "upload_knowledge_document",
       entity: "knowledge_docs",
       entityId: String(doc.id),

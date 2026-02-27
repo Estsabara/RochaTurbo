@@ -9,9 +9,12 @@ export type ConversationState =
 export type SubscriptionStatus =
   | "inactive"
   | "pending_payment"
+  | "trial_active"
   | "active"
   | "overdue"
   | "canceled";
+
+export type EntitlementStatus = "none" | "trial" | "active" | "blocked" | "overdue";
 
 export type PaymentStatus =
   | "pending"
@@ -27,6 +30,15 @@ export type IntentType =
   | "kpi_explain"
   | "compliance_guidance"
   | "payment";
+
+export type ModuleType =
+  | "padrao"
+  | "checklist"
+  | "promocao"
+  | "kpi"
+  | "marketing"
+  | "swot"
+  | "compliance";
 
 export type MessageDirection = "inbound" | "outbound" | "system";
 

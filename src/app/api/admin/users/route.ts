@@ -19,10 +19,13 @@ const statusSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    await assertAdminRequest(request);
     const users = await listUsers(200);
     return NextResponse.json({ users });
   } catch (error) {
+    if (error instanceof Error && error.message.includes("Unauthorized")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to list users" },
       { status: 500 },
@@ -32,7 +35,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    const admin = await assertAdminRequest(request);
     const body = await request.json();
     const parsed = createSchema.parse(body);
 
@@ -49,7 +52,7 @@ export async function POST(request: NextRequest) {
     });
 
     await logAuditEvent({
-      actor: "admin_api",
+      actor: admin.actor,
       action: "upsert_user",
       entity: "users",
       entityId: user.id as string,
@@ -75,13 +78,13 @@ export async function POST(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    const admin = await assertAdminRequest(request);
     const body = await request.json();
     const parsed = statusSchema.parse(body);
     const user = await updateUserStatus(parsed.user_id, parsed.status);
 
     await logAuditEvent({
-      actor: "admin_api",
+      actor: admin.actor,
       action: "update_user_status",
       entity: "users",
       entityId: parsed.user_id,

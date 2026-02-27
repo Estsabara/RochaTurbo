@@ -13,7 +13,7 @@ const payloadSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    assertAdminRequest(request);
+    await assertAdminRequest(request);
     const body = await request.json();
     const parsed = payloadSchema.parse(body);
 
