@@ -35,8 +35,19 @@ interface GenerateRagAnswerInput {
   }>;
 }
 
+function formatConversationHistory(
+  history: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }> = [],
+): string {
+  if (history.length === 0) return "";
+  return history.map((item) => `${item.role === "assistant" ? "Assistente" : "Usuario"}: ${item.content}`).join("\n");
+}
+
 export async function generateRagAnswer(input: GenerateRagAnswerInput): Promise<string> {
   const openai = getOpenAIClient();
+  const env = getServerEnv();
 
   const context = input.contextChunks
     .map(
@@ -46,6 +57,34 @@ export async function generateRagAnswer(input: GenerateRagAnswerInput): Promise<
         }\n${chunk.chunkText}`,
     )
     .join("\n\n");
+
+  const historyText = formatConversationHistory(input.conversationHistory ?? []);
+  const question =
+    historyText.length > 0 ? `${input.userQuestion}\n\nHistorico recente:\n${historyText}` : input.userQuestion;
+
+  if (env.OPENAI_PROMPT_ID) {
+    try {
+      const response = await openai.responses.create({
+        model: "gpt-4.1-mini",
+        prompt: {
+          id: env.OPENAI_PROMPT_ID,
+          variables: {
+            question,
+            context,
+          },
+        },
+        temperature: 0.2,
+      });
+
+      const answerFromPrompt = response.output_text?.trim();
+      if (answerFromPrompt) return answerFromPrompt;
+    } catch (error) {
+      console.warn(
+        "[openai] prompt template failed, using chat.completions fallback:",
+        error instanceof Error ? error.message : "unknown_error",
+      );
+    }
+  }
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4.1-mini",
@@ -63,7 +102,7 @@ export async function generateRagAnswer(input: GenerateRagAnswerInput): Promise<
       })),
       {
         role: "user",
-        content: `Pergunta:\n${input.userQuestion}\n\nContexto:\n${context}`,
+        content: `Pergunta:\n${question}\n\nContexto:\n${context}`,
       },
     ],
     temperature: 0.2,

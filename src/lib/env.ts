@@ -19,6 +19,7 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   OPENAI_API_KEY: optionalSecret,
+  OPENAI_PROMPT_ID: optionalSecret,
   WHATSAPP_TOKEN: optionalSecret,
   WHATSAPP_PHONE_NUMBER_ID: optionalSecret,
   WHATSAPP_VERIFY_TOKEN: optionalSecret,
