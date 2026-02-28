@@ -44,11 +44,12 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
 
   const suggestedMonthRef = getSuggestedPreviousMonthRef(env.FLOW_TIMEZONE);
   const hasCoreInSuggestedMonth = await hasCoreCompletedForMonth(input.userId, suggestedMonthRef);
+  const hasCoreInAnyMonth = hasCoreInSuggestedMonth || (await hasCoreCompletedInAnyMonth(input.userId, suggestedMonthRef));
   const menuSelection = detectMenuSelection(normalizedText);
   const moduleByText = detectModuleByText(normalizedText);
   const monthlyIntent = inferIntent(normalizedText) === "monthly_data_collection";
   const shouldStartOnboarding =
-    (!hasCoreInSuggestedMonth && env.FORCE_EXISTING_USERS) || monthlyIntent || menuSelection === "onboarding";
+    (!hasCoreInAnyMonth && env.FORCE_EXISTING_USERS) || monthlyIntent || menuSelection === "onboarding";
 
   if (shouldStartOnboarding) {
     const onboarding = await startOnboardingFlow(input.userId, suggestedMonthRef);
@@ -57,7 +58,7 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
 
   const moduleSelection = menuSelection && menuSelection !== "rag" ? menuSelection : null;
   if (moduleSelection || moduleByText) {
-    if (!hasCoreInSuggestedMonth) {
+    if (!hasCoreInAnyMonth) {
       const onboarding = await startOnboardingFlow(input.userId, suggestedMonthRef);
       return {
         handled: true,
@@ -92,6 +93,14 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
         allowRag: false,
       };
     }
+  }
+
+  if (isGreetingForMenu(normalizedText)) {
+    return {
+      handled: true,
+      messages: ["Ola! Como posso te ajudar agora? Escolha uma opcao no menu abaixo.", getMainMenuText()],
+      allowRag: false,
+    };
   }
 
   return { handled: false, messages: [], allowRag: true };
@@ -634,6 +643,14 @@ async function hasCoreCompletedForMonth(userId: string, monthRef: string): Promi
   return isCoreCompleted(answers);
 }
 
+async function hasCoreCompletedInAnyMonth(userId: string, referenceMonthRef: string): Promise<boolean> {
+  const previousInput = await getLatestMonthlyInputBefore(userId, referenceMonthRef);
+  if (!previousInput?.input_json || typeof previousInput.input_json !== "object") {
+    return false;
+  }
+  return isCoreCompleted(previousInput.input_json as Record<string, unknown>);
+}
+
 function sanitizeInputData(
   answers: Record<string, unknown>,
   baseInput: Record<string, unknown> = {},
@@ -760,5 +777,15 @@ function seemsDiversion(text: string): boolean {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
   return /menu|kpi|promoc|marketing|swot|checklist|padrao|dashboard|indicador/.test(normalized);
+}
+
+function isGreetingForMenu(text: string): boolean {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  return /^(oi|ola|bom dia|boa tarde|boa noite|menu|comecar|inicio)(\b|$)/.test(normalized);
 }
 

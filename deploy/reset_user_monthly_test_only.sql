@@ -29,6 +29,20 @@ begin
   where user_id = v_user
     and status = 'open';
 
+  -- Reset de sessao para sair de awaiting_otp/authenticated e voltar ao inicio.
+  update public.sessions
+  set state = 'awaiting_cpf',
+      user_id = null,
+      last_seen_at = now()
+  where user_id = v_user
+     or wa_contact_id = v_phone;
+
+  -- Expira desafios OTP pendentes do usuario.
+  update public.auth_otp_challenges
+  set consumed_at = now()
+  where user_id = v_user
+    and consumed_at is null;
+
   delete from public.monthly_kpis
   where user_id = v_user
     and month_ref = v_month::date;

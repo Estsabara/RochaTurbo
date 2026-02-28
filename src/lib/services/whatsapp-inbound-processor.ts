@@ -256,6 +256,10 @@ async function handleOtpValidation(params: {
         "Acesso liberado com sucesso.\n" +
         `Enquanto a cobranca estiver pausada, voce pode usar o ${BOT_NAME} normalmente.`,
     });
+    await maybeStartInitialOnboardingAfterOtp({
+      userId: params.userId,
+      phoneE164: params.phoneE164,
+    });
     return;
   }
 
@@ -267,6 +271,10 @@ async function handleOtpValidation(params: {
       message:
         "Acesso liberado com sucesso.\n" +
         `Eu sou a ${BOT_NAME} e ja posso te ajudar com operacao, KPI, checklist, marketing e SWOT.`,
+    });
+    await maybeStartInitialOnboardingAfterOtp({
+      userId: params.userId,
+      phoneE164: params.phoneE164,
     });
     return;
   }
@@ -723,6 +731,50 @@ function getFirstName(name: string): string {
   const clean = name.trim();
   if (!clean) return "";
   return clean.split(/\s+/)[0] ?? "";
+}
+
+async function maybeStartInitialOnboardingAfterOtp(input: {
+  userId: string;
+  phoneE164: string;
+}): Promise<void> {
+  const env = getServerEnv();
+  if (!env.WHATSAPP_FLOW_V2_ENABLED) return;
+
+  try {
+    const supabase = getServiceSupabaseClient();
+    const { data: monthlyInput } = await supabase
+      .from("monthly_inputs")
+      .select("id")
+      .eq("user_id", input.userId)
+      .order("month_ref", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // Onboarding automatico apenas no primeiro acesso (sem historico mensal).
+    if (monthlyInput?.id) return;
+
+    await sendWhatsAppTextMessage({
+      to: input.phoneE164,
+      message: "Perfeito! Agora vamos comecar seu onboarding inicial. Vou te fazer uma pergunta por vez.",
+    });
+
+    const flowResult = await processWhatsAppFlowMessage({
+      userId: input.userId,
+      text: "1",
+      waMessageId: `post-otp-onboarding-${Date.now()}`,
+    });
+
+    if (!flowResult.handled || flowResult.messages.length === 0) return;
+
+    for (const message of flowResult.messages) {
+      await sendWhatsAppTextMessage({
+        to: input.phoneE164,
+        message,
+      });
+    }
+  } catch {
+    // Nao falha autenticacao por erro no start automatico do onboarding.
+  }
 }
 
 function extractContactProfileName(rawPayload: unknown, fromWaId: string): string | null {
