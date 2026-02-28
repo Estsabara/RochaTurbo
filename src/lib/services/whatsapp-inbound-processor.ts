@@ -10,6 +10,7 @@ import {
   updateSessionState,
 } from "@/lib/services/conversations";
 import { inferIntent } from "@/lib/services/intent";
+import { getMainMenuText } from "@/lib/flows/module-definitions";
 import { createAsaasBillingLink, mapAsaasPaymentStatus } from "@/lib/services/asaas";
 import { hasPremiumEntitlement, refreshUserEntitlement } from "@/lib/services/entitlements";
 import { generateModuleArtifact, getGeneratedFileSignedUrl } from "@/lib/services/modules";
@@ -256,8 +257,7 @@ async function handleOtpValidation(params: {
         "Acesso liberado com sucesso.\n" +
         `Enquanto a cobranca estiver pausada, voce pode usar o ${BOT_NAME} normalmente.`,
     });
-    await maybeStartInitialOnboardingAfterOtp({
-      userId: params.userId,
+    await maybeSendPostAuthMenu({
       phoneE164: params.phoneE164,
     });
     return;
@@ -272,8 +272,7 @@ async function handleOtpValidation(params: {
         "Acesso liberado com sucesso.\n" +
         `Eu sou a ${BOT_NAME} e ja posso te ajudar com operacao, KPI, checklist, marketing e SWOT.`,
     });
-    await maybeStartInitialOnboardingAfterOtp({
-      userId: params.userId,
+    await maybeSendPostAuthMenu({
       phoneE164: params.phoneE164,
     });
     return;
@@ -733,52 +732,33 @@ function getFirstName(name: string): string {
   return clean.split(/\s+/)[0] ?? "";
 }
 
-async function maybeStartInitialOnboardingAfterOtp(input: {
-  userId: string;
-  phoneE164: string;
-}): Promise<void> {
-  const env = getServerEnv();
-  if (!env.WHATSAPP_FLOW_V2_ENABLED) return;
-
+async function maybeSendPostAuthMenu(input: { phoneE164: string }): Promise<void> {
   try {
-    const supabase = getServiceSupabaseClient();
-    const { data: activeFlow } = await supabase
-      .from("chat_flows")
-      .select("id")
-      .eq("user_id", input.userId)
-      .eq("status", "active")
-      .limit(1)
-      .maybeSingle();
-    if (activeFlow?.id) return;
+    const env = getServerEnv();
+    const intro =
+      "Como gostaria de prosseguir?\n" +
+      "1. Onboarding mensal\n" +
+      "2. Padrao de atendimento\n" +
+      "3. Checklist\n" +
+      "4. Analise SWOT";
+
+    const guidance = env.WHATSAPP_FLOW_V2_ENABLED
+      ? "Responda com o numero da opcao desejada."
+      : "Se preferir, escreva o nome da opcao (ex.: swot, checklist, padrao).";
 
     await sendWhatsAppTextMessage({
       to: input.phoneE164,
-      message: "Perfeito! Agora vamos comecar o onboarding mensal. Vou te fazer uma pergunta por vez.",
+      message: `${intro}\n${guidance}`,
     });
 
-    const flowResult = await processWhatsAppFlowMessage({
-      userId: input.userId,
-      text: "1",
-      waMessageId: `post-otp-onboarding-${Date.now()}`,
-    });
-
-    if (!flowResult.handled || flowResult.messages.length === 0) return;
-
-    for (const message of flowResult.messages) {
+    if (env.WHATSAPP_FLOW_V2_ENABLED) {
       await sendWhatsAppTextMessage({
         to: input.phoneE164,
-        message,
+        message: getMainMenuText(),
       });
     }
   } catch {
-    try {
-      await sendWhatsAppTextMessage({
-        to: input.phoneE164,
-        message: "Nao consegui iniciar automaticamente. Envie 1 para comecar o onboarding mensal.",
-      });
-    } catch {
-      // Nao falha autenticacao por erro no start automatico do onboarding.
-    }
+    // Nao falha autenticacao por erro no envio do menu.
   }
 }
 
