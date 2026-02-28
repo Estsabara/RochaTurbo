@@ -26,9 +26,7 @@ const CORE_QUESTION_KEYS = new Set(getOnboardingCoreKeys());
 
 export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput): Promise<ProcessFlowMessageResult> {
   const env = getServerEnv();
-  if (!env.WHATSAPP_FLOW_V2_ENABLED) {
-    return { handled: false, messages: [], allowRag: true };
-  }
+  const v2Enabled = env.WHATSAPP_FLOW_V2_ENABLED;
 
   const normalizedText = input.text.trim();
   const parsedCommand = parseFlowCommand(normalizedText);
@@ -49,7 +47,7 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
   const moduleByText = detectModuleByText(normalizedText);
   const monthlyIntent = inferIntent(normalizedText) === "monthly_data_collection";
   const shouldStartOnboarding =
-    (!hasCoreInAnyMonth && env.FORCE_EXISTING_USERS) || monthlyIntent || menuSelection === "onboarding";
+    menuSelection === "onboarding" || (v2Enabled && (((!hasCoreInAnyMonth && env.FORCE_EXISTING_USERS) || monthlyIntent)));
 
   if (shouldStartOnboarding) {
     const onboarding = await startOnboardingFlow(input.userId, suggestedMonthRef);
@@ -57,7 +55,8 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
   }
 
   const moduleSelection = menuSelection && menuSelection !== "rag" ? menuSelection : null;
-  if (moduleSelection || moduleByText) {
+  const moduleSelectionByText = v2Enabled ? moduleByText : null;
+  if (moduleSelection || moduleSelectionByText) {
     if (!hasCoreInAnyMonth) {
       const onboarding = await startOnboardingFlow(input.userId, suggestedMonthRef);
       return {
@@ -70,7 +69,7 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
       };
     }
 
-    const wizard = moduleSelection ?? moduleByText;
+    const wizard = moduleSelection ?? moduleSelectionByText;
     if (wizard) {
       const flow = await createChatFlow({
         userId: input.userId,
