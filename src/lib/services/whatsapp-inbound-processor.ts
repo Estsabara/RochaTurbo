@@ -415,8 +415,6 @@ async function handleAuthenticatedMessage(params: {
 
   const moduleRequest = detectModuleRequest(params.text);
   if (moduleRequest && !getServerEnv().WHATSAPP_FLOW_V2_ENABLED) {
-    await sendLoadingMessage(params.phoneE164);
-
     try {
       const artifact = await generateModuleArtifact({
         userId: params.userId,
@@ -470,8 +468,6 @@ async function handleAuthenticatedMessage(params: {
       role: row.direction === "outbound" ? ("assistant" as const) : ("user" as const),
       content: String(row.content_text),
     }));
-
-  await sendLoadingMessage(params.phoneE164);
 
   let ragResult: Awaited<ReturnType<typeof answerWithRag>>;
   try {
@@ -727,17 +723,6 @@ function getFirstName(name: string): string {
   const clean = name.trim();
   if (!clean) return "";
   return clean.split(/\s+/)[0] ?? "";
-}
-
-async function sendLoadingMessage(phoneE164: string): Promise<void> {
-  try {
-    await sendWhatsAppTextMessage({
-      to: phoneE164,
-      message: `${BOT_NAME}: recebi sua mensagem. Um instante enquanto preparo a melhor resposta para voce.`,
-    });
-  } catch {
-    // non-blocking helper message
-  }
 }
 
 function extractContactProfileName(rawPayload: unknown, fromWaId: string): string | null {

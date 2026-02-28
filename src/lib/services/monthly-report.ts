@@ -130,7 +130,7 @@ function buildTrendLines(rows: Array<Record<string, unknown>>): string[] {
       const team = asObject(kpis.team_occupancy);
       const mix = asObject(kpis.additized_mix);
       const alerts = Array.isArray(row.alerts_json) ? row.alerts_json.length : 0;
-      return `${formatMonthRef(monthRef)}: litros/frentista=${fmtNumber(team.liters_per_attendant)} | mix_otho=${fmtPercent(mix.otto_pct)} | alertas=${alerts}`;
+      return `${formatMonthRef(monthRef)}: litros/frentista=${fmtNumber(team.liters_per_attendant)} | mix_otto=${fmtPercent(mix.otto_pct)} | alertas=${alerts}`;
     });
 }
 
@@ -221,4 +221,3 @@ function formatMonthRef(monthRef: string): string {
   if (!year || !month) return monthRef;
   return `${month}/${year}`;
 }
-

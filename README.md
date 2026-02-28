@@ -91,3 +91,45 @@ O script `scripts/ingest_knowledge.py` agora processa `DOCX`, `PDF`, `XLSX` e `X
 ## Nota sobre n8n
 
 A pasta `n8n/` foi mantida apenas como historico de workflows. O runtime atual do projeto nao depende de `n8n`.
+
+## Go-live V2 (WhatsApp Flow)
+
+1. Aplicar migrations:
+
+```bash
+npm run db:push
+```
+
+2. Ativar flags no `.env.local`:
+
+```bash
+WHATSAPP_FLOW_V2_ENABLED=true
+FORCE_EXISTING_USERS=true
+FLOW_TIMEZONE=America/Sao_Paulo
+```
+
+3. Reiniciar processos no servidor:
+
+```bash
+pm2 restart rocha-turbo --update-env
+pm2 restart rocha-turbo-worker --update-env
+pm2 restart rocha-turbo-scheduler --update-env
+```
+
+## Reset seguro de fluxos ativos
+
+Use este SQL no Supabase para resetar somente fluxos e conversas ativas, sem apagar `monthly_inputs`/`monthly_kpis`:
+
+```sql
+update public.chat_flows
+set status = 'canceled',
+    canceled_at = now(),
+    updated_at = now()
+where status = 'active';
+
+update public.conversations
+set status = 'closed',
+    closed_at = now(),
+    last_message_at = now()
+where status = 'open';
+```

@@ -1,4 +1,4 @@
-import { getServerEnv } from "@/lib/env";
+﻿import { getServerEnv } from "@/lib/env";
 import { ONBOARDING_FLOW_DEFINITION, getOnboardingCoreKeys } from "@/lib/flows/onboarding-definition";
 import { detectMenuSelection, detectModuleByText, getMainMenuText, MODULE_FLOW_DEFINITIONS } from "@/lib/flows/module-definitions";
 import { parseByKind, parseFlowCommand } from "@/lib/flows/parsers";
@@ -8,7 +8,7 @@ import { computeAndUpsertMonthlyKpis, getLatestMonthlyInputBefore, getMonthlyInp
 import { generateMonthlyDiagnosisReport } from "@/lib/services/monthly-report";
 import { createChatFlow, getActiveChatFlow, type ChatFlowRow, updateChatFlow } from "@/lib/services/chat-flows";
 import { generateModuleArtifact, getGeneratedFileSignedUrl } from "@/lib/services/modules";
-import { monthlyInputSchema } from "@/lib/validation/monthly-input";
+import { fuelPricesSchema, monthlyInputSchema } from "@/lib/validation/monthly-input";
 
 interface ProcessFlowMessageInput {
   userId: string;
@@ -48,7 +48,7 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
   const moduleByText = detectModuleByText(normalizedText);
   const monthlyIntent = inferIntent(normalizedText) === "monthly_data_collection";
   const shouldStartOnboarding =
-    !hasCoreInSuggestedMonth && env.FORCE_EXISTING_USERS || monthlyIntent || menuSelection === "onboarding";
+    (!hasCoreInSuggestedMonth && env.FORCE_EXISTING_USERS) || monthlyIntent || menuSelection === "onboarding";
 
   if (shouldStartOnboarding) {
     const onboarding = await startOnboardingFlow(input.userId, suggestedMonthRef);
@@ -100,7 +100,9 @@ export async function processWhatsAppFlowMessage(input: ProcessFlowMessageInput)
 async function startOnboardingFlow(userId: string, suggestedMonthRef: string) {
   const current = await getMonthlyInput(userId, suggestedMonthRef);
   const previous = await getLatestMonthlyInputBefore(userId, suggestedMonthRef);
-  const prefillInput = sanitizeInputData((current?.input_json as Record<string, unknown>) ?? (previous?.input_json as Record<string, unknown>) ?? {});
+  const prefillInput = sanitizeInputData(
+    (current?.input_json as Record<string, unknown>) ?? (previous?.input_json as Record<string, unknown>) ?? {},
+  ).data;
   const flow = await createChatFlow({
     userId,
     flowType: "onboarding",
@@ -139,17 +141,40 @@ async function handleExistingFlow(
 
   const answers = asObject(flow.answers_json);
   const context = asObject(flow.context_json);
-  const question = getQuestionByKey(definition, flow.step_key);
+  let activeFlow = flow;
+  let stepReconciled = false;
+  let question = getQuestionByKey(definition, flow.step_key);
+  if (question && !isQuestionVisible(question, answers)) {
+    const fallbackQuestion = getFirstPendingVisibleQuestion(definition, answers);
+    if (fallbackQuestion) {
+      await updateChatFlow(flow.id, { stepKey: fallbackQuestion.key, lastWaMessageId: waMessageId });
+      activeFlow = { ...flow, step_key: fallbackQuestion.key };
+      question = fallbackQuestion;
+      stepReconciled = true;
+    } else {
+      question = null;
+    }
+  }
   if (!question) {
-    return completeFlow(flow, definition, answers, context);
+    return completeFlow(activeFlow, definition, answers, context);
+  }
+  if (stepReconciled) {
+    return {
+      handled: true,
+      allowRag: false,
+      messages: ["Ajustei seu fluxo para a etapa correta.", buildQuestionPrompt(definition, activeFlow)],
+    };
   }
 
   if (command) {
-    const handledCommand = await handleFlowCommand(flow, definition, question, command, answers, context, waMessageId);
+    const handledCommand = await handleFlowCommand(activeFlow, definition, question, command, answers, context, waMessageId);
     if (handledCommand) return handledCommand;
   }
 
-  const parsed = parseByKind(text, question.parser, question.options ?? []);
+  const parsed = parseByKind(text, question.parser, question.options ?? [], {
+    minSelections: question.minSelections,
+    maxSelections: question.maxSelections,
+  });
   if (!parsed.ok) {
     if (definition.type === "onboarding" && !isCoreCompleted(answers) && seemsDiversion(text)) {
       const pending = pendingCoreQuestions(answers);
@@ -158,14 +183,14 @@ async function handleExistingFlow(
         allowRag: false,
         messages: [
           `Antes de seguir para outros assuntos, preciso concluir o nucleo do diagnostico. Pendencias: ${pending.join(", ")}.`,
-          buildQuestionPrompt(definition, flow),
+          buildQuestionPrompt(definition, activeFlow),
         ],
       };
     }
     return {
       handled: true,
       allowRag: false,
-      messages: [`Nao entendi sua resposta: ${parsed.error}`, buildQuestionPrompt(definition, flow)],
+      messages: [`Nao entendi sua resposta: ${parsed.error}`, buildQuestionPrompt(definition, activeFlow)],
     };
   }
 
@@ -181,6 +206,14 @@ async function handleExistingFlow(
     nextContext.month_ref = resolvedValue;
   }
 
+  let monthlySnapshot: { data: Record<string, unknown>; warnings: string[] } | null = null;
+  const monthRefForOnboarding = String(nextContext.month_ref ?? flow.month_ref ?? "");
+  if (definition.type === "onboarding" && monthRefForOnboarding) {
+    const existingInput = await getMonthlyInput(flow.user_id, monthRefForOnboarding);
+    monthlySnapshot = sanitizeInputData(nextAnswers, asObject(existingInput?.input_json));
+    applyValidationWarnings(nextContext, monthlySnapshot.warnings);
+  }
+
   const nextQuestion = getNextQuestion(definition, answers, question.key, nextAnswers);
 
   await updateChatFlow(flow.id, {
@@ -194,16 +227,20 @@ async function handleExistingFlow(
   });
 
   if (definition.type === "onboarding") {
-    const monthRef = String(nextContext.month_ref ?? flow.month_ref ?? "");
-    if (monthRef) {
-      const monthlyInput = sanitizeInputData(nextAnswers);
-      await upsertMonthlyInput(flow.user_id, monthRef, monthlyInput, "chat", false);
+    if (monthRefForOnboarding) {
+      await upsertMonthlyInput(
+        flow.user_id,
+        monthRefForOnboarding,
+        (monthlySnapshot?.data ?? sanitizeInputData(nextAnswers).data),
+        "chat",
+        false,
+      );
     }
   }
 
   if (nextQuestion) {
     const refreshedFlow = {
-      ...flow,
+      ...activeFlow,
       answers_json: nextAnswers,
       context_json: nextContext,
       step_key: nextQuestion.key,
@@ -216,7 +253,7 @@ async function handleExistingFlow(
     };
   }
 
-  return completeFlow(flow, definition, nextAnswers, nextContext);
+  return completeFlow(activeFlow, definition, nextAnswers, nextContext);
 }
 
 async function handleFlowCommand(
@@ -261,25 +298,49 @@ async function handleFlowCommand(
       return {
         handled: true,
         allowRag: false,
-        messages: ["Essa pergunta e obrigatoria. Se quiser, responda com um valor aproximado.", buildQuestionPrompt(definition, flow)],
+        messages: [
+          "Essa pergunta e obrigatoria. Se quiser, responda com um valor aproximado.",
+          buildQuestionPrompt(definition, flow),
+        ],
       };
     }
     const nextAnswers = { ...answers };
+    const nextContext = { ...context };
     setPath(nextAnswers, question.fieldPath, null);
     const nextQuestion = getNextQuestion(definition, answers, question.key, nextAnswers);
+
+    if (definition.type === "onboarding") {
+      const monthRef = String(nextContext.month_ref ?? flow.month_ref ?? "");
+      if (monthRef) {
+        const existingInput = await getMonthlyInput(flow.user_id, monthRef);
+        const sanitized = sanitizeInputData(nextAnswers, asObject(existingInput?.input_json));
+        applyValidationWarnings(nextContext, sanitized.warnings);
+        await upsertMonthlyInput(flow.user_id, monthRef, sanitized.data, "chat", false);
+      }
+    }
+
     await updateChatFlow(flow.id, {
       answers: nextAnswers,
+      context: nextContext,
       stepKey: nextQuestion?.key ?? question.key,
       lastWaMessageId: waMessageId,
     });
     if (!nextQuestion) {
-      return completeFlow(flow, definition, nextAnswers, context);
+      return completeFlow(flow, definition, nextAnswers, nextContext);
     }
-    const nextFlow = { ...flow, step_key: nextQuestion.key, answers_json: nextAnswers };
+    const nextFlow = { ...flow, step_key: nextQuestion.key, answers_json: nextAnswers, context_json: nextContext };
     return { handled: true, allowRag: false, messages: [buildQuestionPrompt(definition, nextFlow)] };
   }
 
   if (command === "manter") {
+    if (!question.allowKeep) {
+      return {
+        handled: true,
+        allowRag: false,
+        messages: ["Essa pergunta nao permite usar 'manter'.", buildQuestionPrompt(definition, flow)],
+      };
+    }
+
     const prefill = asObject(context.prefill_input);
     const keepValue = getPath(prefill, question.fieldPath);
     if (keepValue === undefined) {
@@ -291,17 +352,30 @@ async function handleFlowCommand(
     }
 
     const nextAnswers = { ...answers };
+    const nextContext = { ...context };
     setPath(nextAnswers, question.fieldPath, keepValue);
     const nextQuestion = getNextQuestion(definition, answers, question.key, nextAnswers);
+
+    if (definition.type === "onboarding") {
+      const monthRef = String(nextContext.month_ref ?? flow.month_ref ?? "");
+      if (monthRef) {
+        const existingInput = await getMonthlyInput(flow.user_id, monthRef);
+        const sanitized = sanitizeInputData(nextAnswers, asObject(existingInput?.input_json));
+        applyValidationWarnings(nextContext, sanitized.warnings);
+        await upsertMonthlyInput(flow.user_id, monthRef, sanitized.data, "chat", false);
+      }
+    }
+
     await updateChatFlow(flow.id, {
       answers: nextAnswers,
+      context: nextContext,
       stepKey: nextQuestion?.key ?? question.key,
       lastWaMessageId: waMessageId,
     });
     if (!nextQuestion) {
-      return completeFlow(flow, definition, nextAnswers, context);
+      return completeFlow(flow, definition, nextAnswers, nextContext);
     }
-    const nextFlow = { ...flow, step_key: nextQuestion.key, answers_json: nextAnswers };
+    const nextFlow = { ...flow, step_key: nextQuestion.key, answers_json: nextAnswers, context_json: nextContext };
     return { handled: true, allowRag: false, messages: [buildQuestionPrompt(definition, nextFlow)] };
   }
 
@@ -339,9 +413,10 @@ async function completeFlow(
       };
     }
 
-    const sanitized = sanitizeInputData(answers);
-    await upsertMonthlyInput(flow.user_id, monthRef, sanitized, "chat", true);
-    const computed = await computeAndUpsertMonthlyKpis(flow.user_id, monthRef, sanitized);
+    const existingInput = await getMonthlyInput(flow.user_id, monthRef);
+    const sanitized = sanitizeInputData(answers, asObject(existingInput?.input_json));
+    await upsertMonthlyInput(flow.user_id, monthRef, sanitized.data, "chat", true);
+    const computed = await computeAndUpsertMonthlyKpis(flow.user_id, monthRef, sanitized.data);
     const comparisonRows = await getRecentMonthlyKpis(flow.user_id, 3);
     const report = await generateMonthlyDiagnosisReport({
       userId: flow.user_id,
@@ -356,6 +431,7 @@ async function completeFlow(
       answers,
       context: {
         ...context,
+        ...(sanitized.warnings.length > 0 ? { validation_warnings: sanitized.warnings.slice(-20) } : {}),
         completed_reason: "onboarding_finished",
         report_file_id: report.fileId,
       },
@@ -450,6 +526,22 @@ function getVisibleQuestions(definition: FlowDefinition, answers: Record<string,
   return definition.questions.filter((question) => (question.when ? question.when(answers) : true));
 }
 
+function isQuestionVisible(question: FlowQuestionDefinition, answers: Record<string, unknown>): boolean {
+  return question.when ? question.when(answers) : true;
+}
+
+function getFirstPendingVisibleQuestion(
+  definition: FlowDefinition,
+  answers: Record<string, unknown>,
+): FlowQuestionDefinition | null {
+  const visible = getVisibleQuestions(definition, answers);
+  return (
+    visible.find((candidate) => isMissingRequiredValue(getPath(answers, candidate.fieldPath))) ??
+    visible[0] ??
+    null
+  );
+}
+
 function getNextQuestion(
   definition: FlowDefinition,
   currentAnswers: Record<string, unknown>,
@@ -476,6 +568,9 @@ function getPreviousQuestion(
 function buildQuestionPrompt(definition: FlowDefinition, flow: ChatFlowRow): string {
   const question = getQuestionByKey(definition, flow.step_key);
   if (!question) return "Fluxo concluido.";
+  const answers = asObject(flow.answers_json);
+  const visibleQuestions = getVisibleQuestions(definition, answers);
+  const currentIndex = visibleQuestions.findIndex((candidate) => candidate.key === question.key);
   const context = asObject(flow.context_json);
   const basePrompt = typeof question.prompt === "function"
     ? question.prompt({
@@ -492,7 +587,10 @@ function buildQuestionPrompt(definition: FlowDefinition, flow: ChatFlowRow): str
     helpers.push("Digite 'manter' para usar valor do mes anterior.");
   }
   helpers.push("Digite 'status' para ver progresso.");
-  return helpers.length > 0 ? `${basePrompt}\n${helpers.join(" ")}` : basePrompt;
+  const stage = definition.type === "onboarding" ? "Diagnostico mensal" : "Modulo em andamento";
+  const progress =
+    currentIndex >= 0 ? `${stage} - pergunta ${currentIndex + 1} de ${visibleQuestions.length}.` : `${stage}.`;
+  return helpers.length > 0 ? `${progress}\n${basePrompt}\n${helpers.join(" ")}` : `${progress}\n${basePrompt}`;
 }
 
 function buildStatusMessage(definition: FlowDefinition, answers: Record<string, unknown>): string {
@@ -536,16 +634,69 @@ async function hasCoreCompletedForMonth(userId: string, monthRef: string): Promi
   return isCoreCompleted(answers);
 }
 
-function sanitizeInputData(answers: Record<string, unknown>) {
+function sanitizeInputData(
+  answers: Record<string, unknown>,
+  baseInput: Record<string, unknown> = {},
+): { data: Record<string, unknown>; warnings: string[] } {
   const candidate = { ...answers };
   delete candidate._meta;
-  const parsed = monthlyInputSchema.partial().safeParse(candidate);
-  return parsed.success ? parsed.data : {};
+
+  const data = deepCloneRecord(baseInput);
+  const warnings: string[] = [];
+  const schemaShape = monthlyInputSchema.shape as Record<string, { safeParse: (value: unknown) => { success: boolean; data?: unknown } }>;
+  const priceSchemaShape = fuelPricesSchema.unwrap().shape as Record<
+    string,
+    { safeParse: (value: unknown) => { success: boolean; data?: unknown } }
+  >;
+
+  for (const [key, value] of Object.entries(candidate)) {
+    if (key === "x_precos_venda") {
+      const nextPrices = { ...asObject(data.x_precos_venda), ...asObject(value) };
+      const safePrices: Record<string, unknown> = { ...asObject(data.x_precos_venda) };
+      for (const [priceKey, priceValue] of Object.entries(nextPrices)) {
+        const schema = priceSchemaShape[priceKey];
+        if (!schema) continue;
+        const parsed = schema.safeParse(priceValue);
+        if (parsed.success) {
+          safePrices[priceKey] = parsed.data;
+          continue;
+        }
+        warnings.push(`x_precos_venda.${priceKey} ignorado por valor invalido.`);
+      }
+      if (Object.keys(safePrices).length > 0) {
+        data.x_precos_venda = safePrices;
+      }
+      continue;
+    }
+
+    const schema = schemaShape[key];
+    if (!schema) continue;
+    const parsed = schema.safeParse(value);
+    if (parsed.success) {
+      data[key] = parsed.data;
+      continue;
+    }
+    warnings.push(`${key} ignorado por valor invalido.`);
+  }
+
+  return { data, warnings };
 }
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function deepCloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function applyValidationWarnings(context: Record<string, unknown>, warnings: string[]) {
+  if (warnings.length === 0) {
+    delete context.validation_warnings;
+    return;
+  }
+  context.validation_warnings = warnings.slice(-20);
 }
 
 function getPath(source: Record<string, unknown>, path: string): unknown {
@@ -604,6 +755,10 @@ function formatMonthRef(monthRef: string): string {
 function seemsDiversion(text: string): boolean {
   if (detectMenuSelection(text)) return true;
   if (detectModuleByText(text)) return true;
-  const lowered = text.toLowerCase();
-  return /menu|kpi|promoc|marketing|swot|checklist|padr[aã]o|dashboard|indicador/.test(lowered);
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /menu|kpi|promoc|marketing|swot|checklist|padrao|dashboard|indicador/.test(normalized);
 }
+

@@ -31,6 +31,8 @@ export interface FlowQuestionDefinition {
   allowKeep?: boolean;
   parser: FlowParserKind;
   options?: string[];
+  minSelections?: number;
+  maxSelections?: number;
   when?: (answers: Record<string, unknown>) => boolean;
 }
 
@@ -43,4 +45,3 @@ export interface FlowDefinition {
 export interface FlowCommandParseResult {
   command: "menu" | "status" | "voltar" | "pular" | "manter" | "encerrar" | null;
 }
-
