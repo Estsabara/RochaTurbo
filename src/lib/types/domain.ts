@@ -44,6 +44,24 @@ export type MessageDirection = "inbound" | "outbound" | "system";
 
 export type OperationType = "urbano" | "rodoviario" | "misto";
 export type ShiftType = "12x36" | "8h";
+export type FlowType = "onboarding" | "module";
+export type FlowStatus = "active" | "completed" | "canceled";
+export type QuestionKey = string;
+
+export interface QuestionDefinition {
+  key: QuestionKey;
+  prompt: string;
+  required?: boolean;
+  allowSkip?: boolean;
+  allowKeep?: boolean;
+  fieldPath?: string;
+}
+
+export interface FlowTransition {
+  from: QuestionKey | null;
+  to: QuestionKey | null;
+  command?: "menu" | "status" | "voltar" | "pular" | "manter" | "encerrar";
+}
 
 export interface FuelPriceInput {
   ga?: number;

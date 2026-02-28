@@ -34,6 +34,9 @@ const serverEnvSchema = z.object({
   MODULE_FILES_BUCKET: z.string().min(1).default("generated-files"),
   OTP_SECRET: z.string().min(16).default("change-this-secret"),
   ADMIN_API_TOKEN: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
+  WHATSAPP_FLOW_V2_ENABLED: z.preprocess(toBoolean, z.boolean()).default(false),
+  FORCE_EXISTING_USERS: z.preprocess(toBoolean, z.boolean()).default(true),
+  FLOW_TIMEZONE: z.string().min(1).default("America/Sao_Paulo"),
 });
 
 type ServerEnv = z.infer<typeof serverEnvSchema>;

@@ -26,6 +26,7 @@ import { getServiceSupabaseClient } from "@/lib/supabase/server";
 import type { ModuleType } from "@/lib/types/domain";
 import { downloadWhatsAppMedia } from "@/lib/services/whatsapp-media";
 import { transcribeAudioFile } from "@/lib/services/ai";
+import { processWhatsAppFlowMessage } from "@/lib/services/whatsapp-flow-orchestrator";
 
 const AUTO_BILLING_AMOUNT_BRL = 149.9;
 const AUTO_BILLING_DESCRIPTION = "Assinatura Rocha Turbo";
@@ -355,18 +356,65 @@ async function handleAuthenticatedMessage(params: {
     return;
   }
 
+  const conversation = await ensureOpenConversation(params.userId);
+  const alreadyProcessed = await alreadyProcessedMessage(params.waMessageId);
+  if (alreadyProcessed) return;
+
+  const intent = inferIntent(params.text);
+  await addConversationMessage({
+    conversationId: String(conversation.id),
+    userId: params.userId,
+    direction: "inbound",
+    contentText: params.text,
+    waMessageId: params.waMessageId,
+    intent,
+    rawPayload: (params.rawPayload as Record<string, unknown>) ?? {},
+  });
+
   const supportIntent = /\batendente\b|\bhumano\b|\bsuporte\b/i.test(params.text);
   if (supportIntent) {
     const supportPhone = await getSupportPhone();
-    await sendWhatsAppTextMessage({
-      to: params.phoneE164,
-      message: `Claro! Para atendimento humano, fale com nossa equipe neste numero: ${supportPhone}`,
+    const supportMessage = `Claro! Para atendimento humano, fale com nossa equipe neste numero: ${supportPhone}`;
+    await addConversationMessage({
+      conversationId: String(conversation.id),
+      userId: params.userId,
+      direction: "outbound",
+      contentText: supportMessage,
+      intent,
+      citations: [],
     });
+    await sendWhatsAppTextMessage({ to: params.phoneE164, message: supportMessage });
     return;
   }
 
+  const flowResult = await processWhatsAppFlowMessage({
+    userId: params.userId,
+    text: params.text,
+    waMessageId: params.waMessageId,
+  });
+
+  if (flowResult.handled) {
+    for (const responseMessage of flowResult.messages) {
+      await addConversationMessage({
+        conversationId: String(conversation.id),
+        userId: params.userId,
+        direction: "outbound",
+        contentText: responseMessage,
+        intent,
+        citations: [],
+      });
+      await sendWhatsAppTextMessage({
+        to: params.phoneE164,
+        message: responseMessage,
+      });
+    }
+    return;
+  }
+
+  if (!flowResult.allowRag) return;
+
   const moduleRequest = detectModuleRequest(params.text);
-  if (moduleRequest) {
+  if (moduleRequest && !getServerEnv().WHATSAPP_FLOW_V2_ENABLED) {
     await sendLoadingMessage(params.phoneE164);
 
     try {
@@ -387,13 +435,12 @@ async function handleAuthenticatedMessage(params: {
         `Pronto! Finalizei o modulo ${moduleRequest}.` +
         (signedUrl ? `\nVoce pode baixar aqui: ${signedUrl}` : "\nArquivo disponivel no CRM.");
 
-      const conversation = await ensureOpenConversation(params.userId);
       await addConversationMessage({
         conversationId: String(conversation.id),
         userId: params.userId,
         direction: "outbound",
         contentText: responseMessage,
-        intent: inferIntent(params.text),
+        intent,
         citations: [],
       });
 
@@ -416,21 +463,6 @@ async function handleAuthenticatedMessage(params: {
     }
   }
 
-  const conversation = await ensureOpenConversation(params.userId);
-  const alreadyProcessed = await alreadyProcessedMessage(params.waMessageId);
-  if (alreadyProcessed) return;
-
-  const intent = inferIntent(params.text);
-  await addConversationMessage({
-    conversationId: String(conversation.id),
-    userId: params.userId,
-    direction: "inbound",
-    contentText: params.text,
-    waMessageId: params.waMessageId,
-    intent,
-    rawPayload: (params.rawPayload as Record<string, unknown>) ?? {},
-  });
-
   const historyRows = await getRecentMessages(String(conversation.id), 8);
   const history = historyRows
     .filter((row) => typeof row.content_text === "string")
@@ -441,7 +473,17 @@ async function handleAuthenticatedMessage(params: {
 
   await sendLoadingMessage(params.phoneE164);
 
-  const ragResult = await answerWithRag(params.text, history);
+  let ragResult: Awaited<ReturnType<typeof answerWithRag>>;
+  try {
+    ragResult = await answerWithRag(params.text, history);
+  } catch {
+    ragResult = {
+      answer:
+        "No momento nao consegui acessar a base de conhecimento. " +
+        "Se quiser, digite 'menu' para continuar pelos fluxos guiados.",
+      citations: [],
+    };
+  }
 
   await addConversationMessage({
     conversationId: String(conversation.id),
