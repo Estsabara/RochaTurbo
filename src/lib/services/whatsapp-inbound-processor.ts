@@ -10,9 +10,11 @@ import {
   updateSessionState,
 } from "@/lib/services/conversations";
 import { inferIntent } from "@/lib/services/intent";
+import { getOnboardingCoreKeys } from "@/lib/flows/onboarding-definition";
 import { createAsaasBillingLink, mapAsaasPaymentStatus } from "@/lib/services/asaas";
 import { hasPremiumEntitlement, refreshUserEntitlement } from "@/lib/services/entitlements";
 import { generateModuleArtifact, getGeneratedFileSignedUrl } from "@/lib/services/modules";
+import { getMonthlyInput } from "@/lib/services/monthly";
 import {
   getLatestPendingPayment,
   getOrCreateSubscription,
@@ -32,6 +34,7 @@ const AUTO_BILLING_AMOUNT_BRL = 149.9;
 const AUTO_BILLING_DESCRIPTION = "Assinatura Rocha Turbo";
 const AUTO_BILLING_DUE_IN_DAYS = 2;
 const BOT_NAME = "Rocha Turbo";
+const CORE_ONBOARDING_FIELDS = getOnboardingCoreKeys();
 
 export interface WhatsAppTextMessage {
   id: string;
@@ -742,20 +745,27 @@ async function maybeStartInitialOnboardingAfterOtp(input: {
 
   try {
     const supabase = getServiceSupabaseClient();
-    const { data: monthlyInput } = await supabase
-      .from("monthly_inputs")
+    const suggestedMonthRef = getSuggestedPreviousMonthRef(env.FLOW_TIMEZONE);
+    const { data: activeFlow } = await supabase
+      .from("chat_flows")
       .select("id")
       .eq("user_id", input.userId)
-      .order("month_ref", { ascending: false })
+      .eq("status", "active")
       .limit(1)
       .maybeSingle();
+    if (activeFlow?.id) return;
 
-    // Onboarding automatico apenas no primeiro acesso (sem historico mensal).
-    if (monthlyInput?.id) return;
+    const monthlyInput = await getMonthlyInput(input.userId, suggestedMonthRef);
+    const monthlyData =
+      monthlyInput?.input_json && typeof monthlyInput.input_json === "object"
+        ? (monthlyInput.input_json as Record<string, unknown>)
+        : {};
+    const coreCompleted = isCoreOnboardingCompleted(monthlyData);
+    if (coreCompleted) return;
 
     await sendWhatsAppTextMessage({
       to: input.phoneE164,
-      message: "Perfeito! Agora vamos comecar seu onboarding inicial. Vou te fazer uma pergunta por vez.",
+      message: "Perfeito! Agora vamos comecar o onboarding mensal. Vou te fazer uma pergunta por vez.",
     });
 
     const flowResult = await processWhatsAppFlowMessage({
@@ -775,6 +785,47 @@ async function maybeStartInitialOnboardingAfterOtp(input: {
   } catch {
     // Nao falha autenticacao por erro no start automatico do onboarding.
   }
+}
+
+function isCoreOnboardingCompleted(input: Record<string, unknown>): boolean {
+  return CORE_ONBOARDING_FIELDS.every((field) => {
+    const value = getPath(input, fieldPathFromQuestionKey(field));
+    if (value === undefined || value === null) return false;
+    if (typeof value === "string" && value.trim().length === 0) return false;
+    return true;
+  });
+}
+
+function fieldPathFromQuestionKey(key: string): string {
+  if (key.startsWith("x_precos_venda_")) {
+    return `x_precos_venda.${key.replace("x_precos_venda_", "")}`;
+  }
+  return key;
+}
+
+function getPath(source: Record<string, unknown>, path: string): unknown {
+  const segments = path.split(".");
+  let cursor: unknown = source;
+  for (const segment of segments) {
+    if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
+}
+
+function getSuggestedPreviousMonthRef(timeZone: string): string {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(now);
+  const year = Number(parts.find((item) => item.type === "year")?.value ?? now.getUTCFullYear());
+  const month = Number(parts.find((item) => item.type === "month")?.value ?? now.getUTCMonth() + 1);
+
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
+  return `${String(prevYear).padStart(4, "0")}-${String(prevMonth).padStart(2, "0")}-01`;
 }
 
 function extractContactProfileName(rawPayload: unknown, fromWaId: string): string | null {
